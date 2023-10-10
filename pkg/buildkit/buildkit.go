@@ -145,7 +145,7 @@ func SolveToLocal(ctx context.Context, c gwclient.Client, st *llb.State, outPath
 		return nil, err
 	}
 
-	ch := make(chan *client.SolveStatus)
+	// ch := make(chan *client.SolveStatus)
 	eg, ctx := errgroup.WithContext(ctx)
 	var b []byte
 	eg.Go(func() error {
@@ -164,19 +164,19 @@ func SolveToLocal(ctx context.Context, c gwclient.Client, st *llb.State, outPath
 		}
 
 		b, err = a.ReadFile(ctx, gwclient.ReadRequest{
-			Filename: "/out/results.manifest",
+			Filename: "/copa-out/results.manifest",
 		})
 
 		return err
 	})
 	eg.Go(func() error {
-		var c console.Console
-		if cn, err := console.ConsoleFromFile(os.Stderr); err == nil {
-			c = cn
-		}
-		// not using shared context to not disrupt display but let us finish reporting errors
-		_, err = progressui.DisplaySolveStatus(context.TODO(), c, os.Stdout, ch)
-		return err
+		// var c console.Console
+		// if cn, err := console.ConsoleFromFile(os.Stderr); err == nil {
+		// 	c = cn
+		// }
+		// // not using shared context to not disrupt display but let us finish reporting errors
+		// _, err = progressui.DisplaySolveStatus(context.TODO(), c, os.Stdout, ch)
+		return nil
 	})
 	if err := eg.Wait(); err != nil {
 		return nil, err

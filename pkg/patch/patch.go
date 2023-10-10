@@ -169,7 +169,7 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 		}
 
 		return c.Solve(ctx, gwclient.SolveRequest{
-			Evaluate: false,
+			Evaluate: true,
 		})
 	}, nil); err != nil {
 		return err

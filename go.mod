@@ -10,6 +10,7 @@ require (
 	github.com/containerd/containerd v1.7.6
 	github.com/cpuguy83/dockercfg v0.3.1
 	github.com/distribution/distribution v2.8.2+incompatible
+	github.com/docker/buildx v0.11.2
 	github.com/docker/cli v24.0.6+incompatible
 	github.com/google/go-containerregistry v0.16.1
 	github.com/hashicorp/go-multierror v1.1.1
@@ -29,7 +30,51 @@ require (
 	google.golang.org/grpc v1.58.2
 )
 
-require github.com/Microsoft/hcsshim v0.11.0 // indirect
+require (
+	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
+	github.com/Microsoft/hcsshim v0.11.0 // indirect
+	github.com/Shopify/logrus-bugsnag v0.0.0-20230117174420-439a4b8ba167 // indirect
+	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/docker/go v1.5.1-1.0.20160303222718-d30aec9fd63c // indirect
+	github.com/docker/go-connections v0.4.0 // indirect
+	github.com/docker/go-metrics v0.0.1 // indirect
+	github.com/docker/go-units v0.5.0 // indirect
+	github.com/felixge/httpsnoop v1.0.3 // indirect
+	github.com/fvbommel/sortorder v1.0.1 // indirect
+	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/gorilla/mux v1.8.0 // indirect
+	github.com/imdario/mergo v0.3.15 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/miekg/pkcs11 v1.1.1 // indirect
+	github.com/moby/sys/mountinfo v0.6.2 // indirect
+	github.com/moby/sys/sequential v0.5.0 // indirect
+	github.com/moby/term v0.5.0 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/pelletier/go-toml v1.9.5 // indirect
+	github.com/prometheus/client_golang v1.16.0 // indirect
+	github.com/prometheus/client_model v0.4.0 // indirect
+	github.com/prometheus/common v0.44.0 // indirect
+	github.com/prometheus/procfs v0.10.1 // indirect
+	github.com/theupdateframework/notary v0.6.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace v0.40.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.40.0 // indirect
+	golang.org/x/oauth2 v0.10.0 // indirect
+	golang.org/x/term v0.11.0 // indirect
+	google.golang.org/appengine v1.6.7 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+	k8s.io/apimachinery v0.28.1 // indirect
+	k8s.io/client-go v0.28.1 // indirect
+	k8s.io/klog/v2 v2.100.1 // indirect
+	k8s.io/utils v0.0.0-20230406110748-d93618cff8a2 // indirect
+	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
+	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
+	sigs.k8s.io/yaml v1.3.0 // indirect
+)
 
 require (
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
