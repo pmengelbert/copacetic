@@ -7,10 +7,10 @@ package pkgmgr
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -39,6 +39,18 @@ func isLessThanAPKVersion(v1, v2 string) bool {
 	return apkV1.LessThan(apkV2)
 }
 
+func apkReadResultsManifest2(b []byte) ([]string, error) {
+	buf := bytes.NewBuffer(b)
+	fs := bufio.NewScanner(buf)
+
+	var lines []string
+	for fs.Scan() {
+		lines = append(lines, fs.Text())
+	}
+
+	return lines, nil
+}
+
 func apkReadResultsManifest(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -56,8 +68,8 @@ func apkReadResultsManifest(path string) ([]string, error) {
 	return lines, nil
 }
 
-func validateAPKPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsPath string, ignoreErrors bool) ([]string, error) {
-	lines, err := apkReadResultsManifest(resultsPath)
+func validateAPKPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsBytes []byte, ignoreErrors bool) ([]string, error) {
+	lines, err := apkReadResultsManifest2(resultsBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -137,14 +149,14 @@ func (am *apkManager) InstallUpdates(ctx context.Context, manifest *types.Update
 	}
 	log.Debugf("latest unique APKs: %v", updates)
 
-	updatedImageState, err := am.upgradePackages(ctx, updates)
+	// get file from state
+	updatedImageState, b, err := am.upgradePackages(ctx, updates)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Validate that the deployed packages are of the requested version or better
-	resultManifestPath := filepath.Join(am.workingFolder, resultsPath, resultManifest)
-	errPkgs, err := validateAPKPackageVersions(updates, apkComparer, resultManifestPath, ignoreErrors)
+	errPkgs, err := validateAPKPackageVersions(updates, apkComparer, b, ignoreErrors)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -159,7 +171,7 @@ func (am *apkManager) InstallUpdates(ctx context.Context, manifest *types.Update
 // TODO: support "distroless" Alpine images (e.g. APKO images)
 // Still assumes that APK exists in the target image and is pathed, which can be addressed by
 // mounting a copy of apk-tools-static into the image and invoking apk-static directly.
-func (am *apkManager) upgradePackages(ctx context.Context, updates types.UpdatePackages) (*llb.State, error) {
+func (am *apkManager) upgradePackages(ctx context.Context, updates types.UpdatePackages) (*llb.State, []byte, error) {
 	// TODO: Add support for custom APK config
 	apkUpdated := am.config.ImageState.Run(llb.Shlex("apk update"), llb.WithProxy(utils.GetProxy())).Root()
 
@@ -189,14 +201,15 @@ func (am *apkManager) upgradePackages(ctx context.Context, updates types.UpdateP
 	resultsWritten := mkFolders.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(apkInstalled, resultsWritten)
 
-	if err := buildkit.SolveToLocal(ctx, am.config.Client, &resultsDiff, am.workingFolder); err != nil {
-		return nil, err
+	b, err := buildkit.SolveToLocal(ctx, am.config.Client, &resultsDiff, am.workingFolder)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Diff the installed updates and merge that into the target image
 	patchDiff := llb.Diff(apkUpdated, apkInstalled)
 	patchMerge := llb.Merge([]llb.State{am.config.ImageState, patchDiff})
-	return &patchMerge, nil
+	return &patchMerge, b, nil
 }
 
 func (am *apkManager) GetPackageType() string {

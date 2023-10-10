@@ -17,6 +17,7 @@ import (
 
 	ref "github.com/distribution/distribution/reference"
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/client/llb"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
 	"github.com/project-copacetic/copacetic/pkg/pkgmgr"
@@ -124,11 +125,15 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 	if _, err := cc.Build(ctx, client.SolveOpt{}, "", func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
 		// Configure buildctl/client for use by package manager
 		var err error
-		config, err = buildkit.InitializeBuildkitConfig(ctx, c, image, updates)
+
+		_, _, configData, err := c.ResolveImageConfig(ctx, image, llb.ResolveImageConfigOpt{
+			ResolveMode: llb.ResolveModePreferLocal.String(),
+		})
+
+		config, err = buildkit.InitializeBuildkitConfig(ctx, c, image, configData, updates)
 		if err != nil {
 			return nil, err
 		}
-		config.Client = cc
 
 		// Create package manager helper
 		pkgmgr, err := pkgmgr.GetPackageManager(updates.OSType, config, workingFolder)

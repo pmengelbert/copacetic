@@ -17,6 +17,7 @@ import (
 	"github.com/docker/cli/cli/config"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
@@ -34,7 +35,7 @@ import (
 
 type Config struct {
 	ImageName  string
-	Client     *client.Client
+	Client     gwclient.Client
 	ConfigData []byte
 	Platform   ispec.Platform
 	ImageState llb.State
@@ -108,7 +109,7 @@ func resolveImageConfig(ctx context.Context, ref string, platform *ispec.Platfor
 	return dgst, config, nil
 }
 
-func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image string, manifest *types.UpdateManifest) (*Config, error) {
+func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image string, configData []byte, manifest *types.UpdateManifest) (*Config, error) {
 	// Initialize buildkit config for the target image
 	config := Config{
 		ImageName: image,
@@ -118,57 +119,54 @@ func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image stri
 		},
 	}
 
-	// Resolve and pull the config for the target image
-	// _, configData, err := resolveImageConfig(ctx, image, &config.Platform)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// _, _, configData, err := c.ResolveImageConfig(ctx, image, llb.ResolveImageConfigOpt{
-	// 	ResolveMode: llb.ResolveModePreferLocal.String(),
-	// })
-	// config.ConfigData = configData
-
 	// Load the target image state with the resolved image config in case environment variable settings
 	// are necessary for running apps in the target image for updates
 	var err error
-	config.ImageState = llb.Image(image,
+	config.ImageState, err = llb.Image(image,
 		llb.Platform(config.Platform),
 		llb.WithMetaResolver(c),
 		llb.ResolveModePreferLocal,
-	)
+	).WithImageConfig(configData)
 
 	if err != nil {
 		return nil, err
 	}
 
-	// config.Client = c
+	config.Client = c
+	config.ConfigData = configData
 
 	return &config, nil
 }
 
-func SolveToLocal(ctx context.Context, c *client.Client, st *llb.State, outPath string) error {
+func SolveToLocal(ctx context.Context, c gwclient.Client, st *llb.State, outPath string) ([]byte, error) {
 	def, err := st.Marshal(ctx)
 	if err != nil {
 		log.Errorf("st.Marshal failed with %s", err)
-		return err
+		return nil, err
 	}
 
-	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
-	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig)}
-	solveOpt := client.SolveOpt{
-		Exports: []client.ExportEntry{
-			{
-				Type:      client.ExporterLocal,
-				OutputDir: outPath,
-			},
-		},
-		Frontend: "",         // i.e. we are passing in the llb.Definition directly
-		Session:  attachable, // used for authprovider, sshagentprovider and secretprovider
-	}
 	ch := make(chan *client.SolveStatus)
 	eg, ctx := errgroup.WithContext(ctx)
+	var b []byte
 	eg.Go(func() error {
-		_, err := c.Solve(ctx, def, solveOpt, ch)
+		// _, err := c.Solve(ctx)
+		resp, err := c.Solve(ctx, gwclient.SolveRequest{
+			Evaluate:   true,
+			Definition: def.ToPB(),
+		})
+		if err != nil {
+			return err
+		}
+
+		a, err := resp.SingleRef()
+		if err != nil {
+			return err
+		}
+
+		b, err = a.ReadFile(ctx, gwclient.ReadRequest{
+			Filename: "/out/results.manifest",
+		})
+
 		return err
 	})
 	eg.Go(func() error {
@@ -181,10 +179,10 @@ func SolveToLocal(ctx context.Context, c *client.Client, st *llb.State, outPath 
 		return err
 	})
 	if err := eg.Wait(); err != nil {
-		return err
+		return nil, err
 	}
 	log.Debugf("Wrote LLB state to %s", outPath)
-	return nil
+	return b, nil
 }
 
 func SolveToDocker(ctx context.Context, c *client.Client, st *llb.State, configData []byte, tag string) error {
@@ -204,7 +202,7 @@ func SolveToDocker(ctx context.Context, c *client.Client, st *llb.State, configD
 				Attrs: map[string]string{
 					"name": tag,
 					// Pass through resolved configData from original image
-					// exptypes.ExporterImageConfigKey: string(configData),
+					exptypes.ExporterImageConfigKey: string(configData),
 				},
 				Output: func(_ map[string]string) (io.WriteCloser, error) {
 					return pipeW, nil

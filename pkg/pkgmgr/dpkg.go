@@ -7,6 +7,7 @@ package pkgmgr
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -112,26 +113,26 @@ func (dm *dpkgManager) InstallUpdates(ctx context.Context, manifest *types.Updat
 
 	// Probe for additional information to execute the appropriate update install graphs
 	toolImageName := getAPTImageName(manifest)
-	if err := dm.probeDPKGStatus(ctx, toolImageName); err != nil {
+	b, err := dm.probeDPKGStatus(ctx, toolImageName)
+	if err != nil {
 		return nil, nil, err
 	}
 
 	var updatedImageState *llb.State
 	if dm.isDistroless {
-		updatedImageState, err = dm.unpackAndMergeUpdates(ctx, updates, toolImageName)
+		updatedImageState, b, err = dm.unpackAndMergeUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		updatedImageState, err = dm.installUpdates(ctx, updates)
+		updatedImageState, b, err = dm.installUpdates(ctx, updates)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	// Validate that the deployed packages are of the requested version or better
-	resultManifestPath := filepath.Join(dm.workingFolder, resultsPath, resultManifest)
-	errPkgs, err := validateDebianPackageVersions(updates, debComparer, resultManifestPath, ignoreErrors)
+	errPkgs, err := validateDebianPackageVersions(updates, debComparer, b, ignoreErrors)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,7 +143,7 @@ func (dm *dpkgManager) InstallUpdates(ctx context.Context, manifest *types.Updat
 // Probe the target image for:
 // - DPKG status type to distinguish between regular and distroless images.
 // - Whether status.d contains base64-encoded package names.
-func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) error {
+func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) ([]byte, error) {
 	// Spin up a build tooling container to pull and unpack packages to create patch layer.
 	toolingBase := llb.Image(toolImage,
 		llb.Platform(dm.config.Platform),
@@ -159,8 +160,9 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 	probeCmd := fmt.Sprintf(probeTemplate, dpkgStatusPath, dpkgStatusFolder, resultsPath, filepath.Join(resultsPath, "status.d"))
 	probed := mkFolders.Run(llb.Shlex(probeCmd)).Root()
 	outState := llb.Diff(busyBoxApplied, probed)
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &outState, dm.workingFolder); err != nil {
-		return err
+	b, err := buildkit.SolveToLocal(ctx, dm.config.Client, &outState, dm.workingFolder)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check Status File
@@ -168,20 +170,20 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 	dpkgStatus := getDPKGStatusType(outStatePath)
 	switch dpkgStatus {
 	case DPKGStatusFile:
-		return nil
+		return b, nil
 	case DPKGStatusDirectory:
 		statusdNames, err := os.ReadFile(filepath.Join(outStatePath, "status.d"))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		dm.statusdNames = strings.ReplaceAll(string(statusdNames), "\n", " ")
 		log.Infof("Processed status.d: %s", dm.statusdNames)
 		dm.isDistroless = true
-		return nil
+		return b, nil
 	default:
 		err := fmt.Errorf("could not infer DPKG status of target image: %v", dpkgStatus)
 		log.Error(err)
-		return err
+		return nil, err
 	}
 }
 
@@ -193,7 +195,7 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 //
 // TODO: Support Debian images with valid dpkg status but missing tools. No current examples exist in test set
 // i.e. extra RunOption to mount a copy of busybox-static or full apt install into the image and invoking that.
-func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, error) {
+func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, []byte, error) {
 	// TODO: Add support for custom APT config and gpg key injection
 	// Since this takes place in the target container, it can interfere with install actions
 	// such as the installation of the updated debian-archive-keyring package, so it's probably best
@@ -218,17 +220,18 @@ func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdateP
 	resultsWritten := aptInstalled.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(aptInstalled, resultsWritten)
 
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder); err != nil {
-		return nil, err
+	b, err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Diff the installed updates and merge that into the target image
 	patchDiff := llb.Diff(aptUpdated, aptInstalled)
 	patchMerge := llb.Merge([]llb.State{dm.config.ImageState, patchDiff})
-	return &patchMerge, nil
+	return &patchMerge, b, nil
 }
 
-func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, error) {
+func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
 	// Spin up a build tooling container to fetch and unpack packages to create patch layer.
 	// Pull family:version -> need to create version to base image map
 	toolingBase := llb.Image(toolImage,
@@ -268,8 +271,9 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.
 	outputResultsCmd := fmt.Sprintf(outputResultsTemplate, resultManifest)
 	resultsWritten := fieldsWritten.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(fieldsWritten, resultsWritten)
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder); err != nil {
-		return nil, err
+	b, err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Update the status.d folder with the package info from the applied update packages
@@ -303,7 +307,7 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.
 	// Diff unpacked packages layers from previous and merge with target
 	statusDiff := llb.Diff(fieldsWritten, statusUpdated)
 	merged := llb.Merge([]llb.State{dm.config.ImageState, unpackedToRoot, statusDiff})
-	return &merged, nil
+	return &merged, b, nil
 }
 
 func (dm *dpkgManager) GetPackageType() string {
@@ -357,9 +361,50 @@ func dpkgParseResultsManifest(path string) (map[string]string, error) {
 	return updateMap, nil
 }
 
-func validateDebianPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsPath string, ignoreErrors bool) ([]string, error) {
+func dpkgParseResultsManifest2(b []byte) (map[string]string, error) {
+	// Open result file
+	buf := bytes.NewBuffer(b)
+
+	// results.manifest file is expected to be subset of DPKG status or debian info format
+	// consisting of repeating consecutive blocks of:
+	//
+	// Package: <package name>
+	// Version: <version value>
+	// ...
+	updateMap := map[string]string{}
+	fs := bufio.NewScanner(buf)
+	var packageName string
+	for fs.Scan() {
+		kv := strings.Split(fs.Text(), " ")
+		if len(kv) != 2 {
+			err := fmt.Errorf("unexpected %s file entry: %s", resultManifest, fs.Text())
+			log.Error(err)
+			return nil, err
+		}
+		switch {
+		case kv[0] == "Package:":
+			if packageName != "" {
+				log.Debugf("ignoring held or not-installed Package without Version: %s", packageName)
+			}
+			packageName = kv[1]
+		case kv[0] == "Version:" && packageName != "":
+			updateMap[packageName] = kv[1]
+			packageName = ""
+		default:
+			err := fmt.Errorf("unexpected field found: %s", fs.Text())
+			log.Error(err)
+			return nil, err
+		}
+	}
+	if packageName != "" {
+		log.Debugf("ignoring held or not-installed Package without Version: %s", packageName)
+	}
+
+	return updateMap, nil
+}
+func validateDebianPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsBytes []byte, ignoreErrors bool) ([]string, error) {
 	// Load file into map[string]string for package:version lookup
-	updateMap, err := dpkgParseResultsManifest(resultsPath)
+	updateMap, err := dpkgParseResultsManifest2(resultsBytes)
 	if err != nil {
 		return nil, err
 	}
