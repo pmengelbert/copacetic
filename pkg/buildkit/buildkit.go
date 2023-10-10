@@ -145,42 +145,28 @@ func SolveToLocal(ctx context.Context, c gwclient.Client, st *llb.State, outPath
 		return nil, err
 	}
 
-	// ch := make(chan *client.SolveStatus)
-	eg, ctx := errgroup.WithContext(ctx)
 	var b []byte
-	eg.Go(func() error {
-		// _, err := c.Solve(ctx)
-		resp, err := c.Solve(ctx, gwclient.SolveRequest{
-			Evaluate:   true,
-			Definition: def.ToPB(),
-		})
-		if err != nil {
-			return err
-		}
-
-		a, err := resp.SingleRef()
-		if err != nil {
-			return err
-		}
-
-		b, err = a.ReadFile(ctx, gwclient.ReadRequest{
-			Filename: "/copa-out/results.manifest",
-		})
-
-		return err
+	// _, err := c.Solve(ctx)
+	resp, err := c.Solve(ctx, gwclient.SolveRequest{
+		Evaluate:   true,
+		Definition: def.ToPB(),
 	})
-	eg.Go(func() error {
-		// var c console.Console
-		// if cn, err := console.ConsoleFromFile(os.Stderr); err == nil {
-		// 	c = cn
-		// }
-		// // not using shared context to not disrupt display but let us finish reporting errors
-		// _, err = progressui.DisplaySolveStatus(context.TODO(), c, os.Stdout, ch)
-		return nil
-	})
-	if err := eg.Wait(); err != nil {
+	if err != nil {
 		return nil, err
 	}
+
+	a, err := resp.SingleRef()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err = a.ReadFile(ctx, gwclient.ReadRequest{
+		Filename: "/copa-out/results.manifest",
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	log.Debugf("Wrote LLB state to %s", outPath)
 	return b, nil
 }
