@@ -145,7 +145,7 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 		// TODO: Add support for other output modes as buildctl does.
 		patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
 
-		if err := buildkit.SolveToDocker(ctx, c, patchedImageState, config.ConfigData, patchedImageName); err != nil {
+		if err := buildkit.SolveToDocker(ctx, cc, patchedImageState, config.ConfigData, patchedImageName); err != nil {
 			return nil, err
 		}
 

@@ -12,14 +12,18 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/containerd/console"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/docker/cli/cli/config"
+	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/exporter/containerimage/image"
-	"github.com/moby/buildkit/frontend/dockerui"
+	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
+	"github.com/moby/buildkit/session"
+	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/util/contentutil"
 	"github.com/moby/buildkit/util/imageutil"
+	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/moby/buildkit/version"
 	"github.com/opencontainers/go-digest"
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -167,67 +171,54 @@ func SolveToLocal(ctx context.Context, c gwclient.Client, st *llb.State, outPath
 	return b, nil
 }
 
-func SolveToDocker(ctx context.Context, c gwclient.Client, st *llb.State, configData []byte, tag string) error {
+func SolveToDocker(ctx context.Context, c *client.Client, st *llb.State, configData []byte, tag string) error {
 	def, err := st.Marshal(ctx)
 	if err != nil {
 		log.Errorf("st.Marshal failed with %s", err)
 		return err
 	}
 
-	// pipeR, pipeW := io.Pipe()
-	// dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
-	// attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig)}
-	// solveOpt := client.SolveOpt{
-	// 	Exports: []client.ExportEntry{
-	// 		{
-	// 			Type: client.ExporterDocker,
-	// 			Attrs: map[string]string{
-	// 				"name": tag,
-	// 				// Pass through resolved configData from original image
-	// 				exptypes.ExporterImageConfigKey: string(configData),
-	// 			},
-	// 			Output: func(_ map[string]string) (io.WriteCloser, error) {
-	// 				return pipeW, nil
-	// 			},
-	// 		},
-	// 	},
-	// 	Frontend: "",         // i.e. we are passing in the llb.Definition directly
-	// 	Session:  attachable, // used for authprovider, sshagentprovider and secretprovider
-	// }
+	pipeR, pipeW := io.Pipe()
+	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
+	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig)}
+	solveOpt := client.SolveOpt{
+		Exports: []client.ExportEntry{
+			{
+				Type: client.ExporterDocker,
+				Attrs: map[string]string{
+					"name": tag,
+					// Pass through resolved configData from original image
+					exptypes.ExporterImageConfigKey: string(configData),
+				},
+				Output: func(_ map[string]string) (io.WriteCloser, error) {
+					return pipeW, nil
+				},
+			},
+		},
+		Frontend: "",         // i.e. we are passing in the llb.Definition directly
+		Session:  attachable, // used for authprovider, sshagentprovider and secretprovider
+	}
 
-	// ch := make(chan *client.SolveStatus)
+	ch := make(chan *client.SolveStatus)
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		dc, err := dockerui.NewClient(c)
-		if err != nil {
+		_, err := c.Solve(ctx, def, solveOpt, ch)
+		return err
+	})
+	eg.Go(func() error {
+		var c console.Console
+		if cn, err := console.ConsoleFromFile(os.Stderr); err == nil {
+			c = cn
+		}
+		// not using shared context to not disrupt display but let us finish reporting errors
+		_, err = progressui.DisplaySolveStatus(context.TODO(), c, os.Stdout, ch)
+		return err
+	})
+	eg.Go(func() error {
+		if err := dockerLoad(ctx, pipeR); err != nil {
 			return err
 		}
-
-		rb, err := dc.Build(ctx, func(ctx context.Context, platform *ispec.Platform, idx int) (gwclient.Reference, *image.Image, error) {
-			r, err := c.Solve(ctx, gwclient.SolveRequest{
-				Evaluate:   true,
-				Definition: def.ToPB(),
-			})
-			if err != nil {
-				return nil, nil, err
-			}
-
-			ref, err := r.SingleRef()
-			if err != nil {
-				return nil, nil, err
-			}
-
-			return ref, nil, nil
-		})
-		if err != nil {
-			return err
-		}
-
-		if _, err := rb.Finalize(); err != nil {
-			return err
-		}
-
-		return nil
+		return pipeR.Close()
 	})
 	return eg.Wait()
 }
