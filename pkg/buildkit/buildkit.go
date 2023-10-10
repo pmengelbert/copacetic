@@ -17,7 +17,7 @@ import (
 	"github.com/docker/cli/cli/config"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/util/contentutil"
@@ -108,7 +108,7 @@ func resolveImageConfig(ctx context.Context, ref string, platform *ispec.Platfor
 	return dgst, config, nil
 }
 
-func InitializeBuildkitConfig(ctx context.Context, client *client.Client, image string, manifest *types.UpdateManifest) (*Config, error) {
+func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image string, manifest *types.UpdateManifest) (*Config, error) {
 	// Initialize buildkit config for the target image
 	config := Config{
 		ImageName: image,
@@ -119,23 +119,29 @@ func InitializeBuildkitConfig(ctx context.Context, client *client.Client, image 
 	}
 
 	// Resolve and pull the config for the target image
-	_, configData, err := resolveImageConfig(ctx, image, &config.Platform)
-	if err != nil {
-		return nil, err
-	}
-	config.ConfigData = configData
+	// _, configData, err := resolveImageConfig(ctx, image, &config.Platform)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// _, _, configData, err := c.ResolveImageConfig(ctx, image, llb.ResolveImageConfigOpt{
+	// 	ResolveMode: llb.ResolveModePreferLocal.String(),
+	// })
+	// config.ConfigData = configData
 
 	// Load the target image state with the resolved image config in case environment variable settings
 	// are necessary for running apps in the target image for updates
-	config.ImageState, err = llb.Image(image,
+	var err error
+	config.ImageState = llb.Image(image,
 		llb.Platform(config.Platform),
-		llb.ResolveModeDefault,
-	).WithImageConfig(config.ConfigData)
+		llb.WithMetaResolver(c),
+		llb.ResolveModePreferLocal,
+	)
+
 	if err != nil {
 		return nil, err
 	}
 
-	config.Client = client
+	// config.Client = c
 
 	return &config, nil
 }
@@ -198,7 +204,7 @@ func SolveToDocker(ctx context.Context, c *client.Client, st *llb.State, configD
 				Attrs: map[string]string{
 					"name": tag,
 					// Pass through resolved configData from original image
-					exptypes.ExporterImageConfigKey: string(configData),
+					// exptypes.ExporterImageConfigKey: string(configData),
 				},
 				Output: func(_ map[string]string) (io.WriteCloser, error) {
 					return pipeW, nil
