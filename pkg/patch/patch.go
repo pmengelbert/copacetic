@@ -116,13 +116,14 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 	}
 	log.Debugf("updates to apply: %v", updates)
 
-	cc, err := buildkit.NewClient(ctx, bkOpts)
+	bkClient, err := buildkit.NewClient(ctx, bkOpts)
 	if err != nil {
 		return err
 	}
-	defer cc.Close()
+	defer bkClient.Close()
 	var config *buildkit.Config
-	if _, err := cc.Build(ctx, client.SolveOpt{}, "", func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
+
+	if _, err := bkClient.Build(ctx, client.SolveOpt{}, "", func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
 		// Configure buildctl/client for use by package manager
 		var err error
 
@@ -145,7 +146,7 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 		// TODO: Add support for other output modes as buildctl does.
 		patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
 
-		if err := buildkit.SolveToDocker(ctx, cc, patchedImageState, config.ConfigData, patchedImageName); err != nil {
+		if err := buildkit.SolveToDocker(ctx, bkClient, patchedImageState, config.ConfigData, patchedImageName); err != nil {
 			return nil, err
 		}
 
@@ -168,9 +169,8 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 			}
 		}
 
-		return c.Solve(ctx, gwclient.SolveRequest{
-			Evaluate: true,
-		})
+		// Already been solved in SolveToDocker
+		return nil, nil
 	}, nil); err != nil {
 		return err
 	}
