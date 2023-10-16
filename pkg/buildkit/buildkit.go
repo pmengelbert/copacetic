@@ -6,6 +6,7 @@
 package buildkit
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -170,6 +171,28 @@ func ExtractFileFromState(ctx context.Context, c gwclient.Client, st *llb.State,
 	return ref.ReadFile(ctx, gwclient.ReadRequest{
 		Filename: path,
 	})
+}
+
+func ArrayFile(input []string) []byte {
+	var b bytes.Buffer
+	for _, s := range input {
+		b.WriteString(s)
+		b.WriteRune('\n') // newline
+	}
+	return b.Bytes()
+}
+
+func WithArrayFile(s *llb.State, path string, contents []string) llb.State {
+	af := ArrayFile(contents)
+	return WithFileBytes(s, path, af)
+}
+
+func WithFileString(s *llb.State, path, contents string) llb.State {
+	return WithFileBytes(s, path, []byte(contents))
+}
+
+func WithFileBytes(s *llb.State, path string, contents []byte) llb.State {
+	return s.File(llb.Mkfile(path, 0o644, contents))
 }
 
 func Env(k, v string) string {

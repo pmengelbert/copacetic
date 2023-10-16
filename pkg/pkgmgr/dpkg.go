@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/go-multierror"
@@ -92,7 +93,13 @@ func getDPKGStatusType(b []byte) dpkgStatusType {
 		return DPKGStatusNone
 	}
 
-	statusType := dpkgStatusType(b[0])
+	st, err := strconv.Atoi(string(b))
+	if err != nil {
+		st = int(DPKGStatusNone)
+	}
+
+	// convert ascii digit to byte
+	statusType := dpkgStatusType(st)
 	if statusType >= DPKGStatusInvalid {
 		return DPKGStatusInvalid
 	}
@@ -168,10 +175,12 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 			buildkit.Env("RESULTS_PATH", resultsPath),
 			buildkit.Env("DPKG_STATUS_FOLDER", dpkgStatusFolder),
 			buildkit.Env("RESULT_STATUSD_PATH", filepath.Join(resultsPath, "status.d")),
-			buildkit.Env("DPKG_STATUS_IS_DIRECTORY", string(byte(DPKGStatusDirectory))),
-			buildkit.Env("DPKG_STATUS_IS_FILE", string(byte(DPKGStatusFile))),
-			buildkit.Env("DPKG_STATUS_IS_UNKNOWN", string(byte(DPKGStatusNone))),
+			buildkit.Env("DPKG_STATUS_IS_DIRECTORY", fmt.Sprintf("%d", DPKGStatusDirectory)),
+			buildkit.Env("DPKG_STATUS_IS_FILE", fmt.Sprintf("%d", DPKGStatusFile)),
+			buildkit.Env("DPKG_STATUS_IS_UNKNOWN", fmt.Sprintf("%d", DPKGStatusNone)),
 			buildkit.Env("STATUSD_OUTPUT_FILENAME", statusdOutputFilename),
+			// writebytes will write the specified number as a byte *by numeric value* to stdout
+			// for example,
 			`sh`, `-c`, `
                 status="$DPKG_STATUS_IS_UNKNOWN"
                 if [ -f "$DPKG_STATUS_PATH" ]; then
@@ -181,7 +190,7 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
                     status="$DPKG_STATUS_IS_DIRECTORY"
                     ls -1 "$DPKG_STATUS_FOLDER" > "$RESULT_STATUSD_PATH"
                 fi
-                printf "$status" > "${RESULTS_PATH}/${STATUSD_OUTPUT_FILENAME}"
+                echo -n "$status" > "${RESULTS_PATH}/${STATUSD_OUTPUT_FILENAME}"
         `,
 		})).Root()
 
