@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -134,7 +133,7 @@ func parseRPMTools(b []byte) (rpmToolPaths, error) {
 	return rpmTools, nil
 }
 
-// Check the RPM DB type given image probe output path.
+// Check the RPM DB type given image probe results
 func getRPMDBType(b []byte) rpmDBType {
 	buf := bytes.NewBuffer(b)
 	s := bufio.NewScanner(buf)
@@ -194,21 +193,21 @@ func (rm *rpmManager) InstallUpdates(ctx context.Context, manifest *types.Update
 	}
 
 	var updatedImageState *llb.State
+	var resultManifestBytes []byte
 	if rm.isDistroless {
-		updatedImageState, err = rm.unpackAndMergeUpdates(ctx, updates, toolImageName)
+		updatedImageState, resultManifestBytes, err = rm.unpackAndMergeUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		updatedImageState, err = rm.installUpdates(ctx, updates)
+		updatedImageState, resultManifestBytes, err = rm.installUpdates(ctx, updates)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	// Validate that the deployed packages are of the requested version or better
-	resultManifestPath := filepath.Join(rm.workingFolder, resultsPath, resultManifest)
-	errPkgs, err := validateRPMPackageVersions(updates, rpmComparer, resultManifestPath, ignoreErrors)
+	errPkgs, err := validateRPMPackageVersions(updates, rpmComparer, resultManifestBytes, ignoreErrors)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -273,9 +272,6 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 	if err != nil {
 		return nil
 	}
-	// if err := buildkit.SolveToLocal(ctx, rm.config.Client, &outState, rm.workingFolder); err != nil {
-	// 	return err
-	// }
 
 	// Check type of RPM DB on image to infer Mariner Distroless
 	rpmDB := getRPMDBType(rpmDBListOutputBytes)
@@ -325,7 +321,7 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 //
 // TODO: Support RPM-based images with valid rpm status but missing tools. (e.g. calico images > v3.21.0)
 // i.e. extra RunOption to mount a copy of rpm tools installed into the image and invoking that.
-func (rm *rpmManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, error) {
+func (rm *rpmManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, []byte, error) {
 	// Format the requested updates into a space-separated string
 	pkgStrings := []string{}
 	for _, u := range updates {
@@ -347,7 +343,7 @@ func (rm *rpmManager) installUpdates(ctx context.Context, updates types.UpdatePa
 		installCmd = fmt.Sprintf(microdnfInstallTemplate, rm.rpmTools["microdnf"], pkgs)
 	default:
 		err := errors.New("unexpected: no package manager tools were found for patching")
-		return nil, err
+		return nil, nil, err
 	}
 	installed := rm.config.ImageState.Run(llb.Shlex(installCmd), llb.WithProxy(utils.GetProxy())).Root()
 
@@ -357,17 +353,18 @@ func (rm *rpmManager) installUpdates(ctx context.Context, updates types.UpdatePa
 	resultsWritten := installed.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(installed, resultsWritten)
 
-	if err := buildkit.SolveToLocal(ctx, rm.config.Client, &resultsDiff, rm.workingFolder); err != nil {
-		return nil, err
+	resultBytes, err := buildkit.ExtractFileFromState(ctx, rm.config.Client, &resultsDiff, filepath.Join(resultsPath, resultManifest))
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Diff the installed updates and merge that into the target image
 	patchDiff := llb.Diff(rm.config.ImageState, installed)
 	patchMerge := llb.Merge([]llb.State{rm.config.ImageState, patchDiff})
-	return &patchMerge, nil
+	return &patchMerge, resultBytes, nil
 }
 
-func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, error) {
+func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
 	// Spin up a build tooling container to fetch and unpack packages to create patch layer.
 	// Pull family:version -> need to create version to base image map
 	toolingBase := llb.Image(toolImage,
@@ -437,29 +434,26 @@ func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates types.U
 	resultsWritten := fieldsWritten.Dir(resultsPath).Run(llb.Shlex(writeResultsCmd)).Root()
 
 	resultsDiff := llb.Diff(fieldsWritten, resultsWritten)
-	if err := buildkit.SolveToLocal(ctx, rm.config.Client, &resultsDiff, rm.workingFolder); err != nil {
-		return nil, err
+	resultBytes, err := buildkit.ExtractFileFromState(ctx, rm.config.Client, &resultsDiff, filepath.Join(resultsPath, resultManifest))
+	if err != nil {
+		return nil, nil, err
 	}
+
 	// Diff unpacked packages layers from previous and merge with target
 	manifestsDiff := llb.Diff(manifestsUpdated, manifestsPlaced)
 	merged := llb.Merge([]llb.State{rm.config.ImageState, patchedRoot, manifestsDiff})
-	return &merged, nil
+	return &merged, resultBytes, nil
 }
 
 func (rm *rpmManager) GetPackageType() string {
 	return "rpm"
 }
 
-func rpmReadResultsManifest(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		log.Errorf("%s could not be opened", path)
-		return nil, err
-	}
-	defer f.Close()
+func rpmReadResultsManifest(b []byte) ([]string, error) {
+	buf := bytes.NewBuffer(b)
 
 	var lines []string
-	fs := bufio.NewScanner(f)
+	fs := bufio.NewScanner(buf)
 	for fs.Scan() {
 		lines = append(lines, fs.Text())
 	}
@@ -467,8 +461,8 @@ func rpmReadResultsManifest(path string) ([]string, error) {
 	return lines, nil
 }
 
-func validateRPMPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsPath string, ignoreErrors bool) ([]string, error) {
-	lines, err := rpmReadResultsManifest(resultsPath)
+func validateRPMPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsBytes []byte, ignoreErrors bool) ([]string, error) {
+	lines, err := rpmReadResultsManifest(resultsBytes)
 	if err != nil {
 		return nil, err
 	}
