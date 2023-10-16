@@ -121,7 +121,7 @@ func (dm *dpkgManager) InstallUpdates(ctx context.Context, manifest *types.Updat
 	var updatedImageState *llb.State
 	var resultManifestBytes []byte
 	if dm.isDistroless {
-		updatedImageState, err = dm.unpackAndMergeUpdates(ctx, updates, toolImageName)
+		updatedImageState, resultManifestBytes, err = dm.unpackAndMergeUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -260,7 +260,7 @@ func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdateP
 	return &patchMerge, resultsBytes, nil
 }
 
-func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, error) {
+func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
 	// Spin up a build tooling container to fetch and unpack packages to create patch layer.
 	// Pull family:version -> need to create version to base image map
 	toolingBase := llb.Image(toolImage,
@@ -304,8 +304,10 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.
 	outputResultsCmd := fmt.Sprintf(outputResultsTemplate, resultManifest)
 	resultsWritten := fieldsWritten.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(fieldsWritten, resultsWritten)
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder); err != nil {
-		return nil, err
+
+	resultsBytes, err := buildkit.ExtractFileFromState(ctx, dm.config.Client, &resultsDiff, filepath.Join(resultsPath, resultManifest))
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Update the status.d folder with the package info from the applied update packages
@@ -339,7 +341,7 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.
 	// Diff unpacked packages layers from previous and merge with target
 	statusDiff := llb.Diff(fieldsWritten, statusUpdated)
 	merged := llb.Merge([]llb.State{dm.config.ImageState, unpackedToRoot, statusDiff})
-	return &merged, nil
+	return &merged, resultsBytes, nil
 }
 
 func (dm *dpkgManager) GetPackageType() string {
