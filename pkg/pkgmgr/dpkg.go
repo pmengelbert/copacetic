@@ -313,7 +313,7 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.
 	// - Older distroless images had a bug where the file names were base64 encoded. If the base64 versions
 	//   of the names were found in the folder previously, then we use those names.
 	copyStatusTemplate := `find . -name '*.fields' -exec sh -c
-		"awk -v statusDir=%s -v statusdNames=\"(%s)\"
+		"awk -v statusDir=%s -v statusdNames=\"%s\"
 			'BEGIN{split(statusdNames,names); for (n in names) b64names[names[n]]=\"\"} {a[\$1]=\$2}
 			 END{cmd = \"printf \" a[\"Package:\"] \" | base64\" ;
 			  cmd | getline b64name ;
