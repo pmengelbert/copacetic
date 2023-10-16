@@ -7,9 +7,9 @@ package pkgmgr
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -119,21 +119,21 @@ func (dm *dpkgManager) InstallUpdates(ctx context.Context, manifest *types.Updat
 	}
 
 	var updatedImageState *llb.State
+	var resultManifestBytes []byte
 	if dm.isDistroless {
 		updatedImageState, err = dm.unpackAndMergeUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		updatedImageState, err = dm.installUpdates(ctx, updates)
+		updatedImageState, resultManifestBytes, err = dm.installUpdates(ctx, updates)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	// Validate that the deployed packages are of the requested version or better
-	resultManifestPath := filepath.Join(dm.workingFolder, resultsPath, resultManifest)
-	errPkgs, err := validateDebianPackageVersions(updates, debComparer, resultManifestPath, ignoreErrors)
+	errPkgs, err := validateDebianPackageVersions(updates, debComparer, resultManifestBytes, ignoreErrors)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -220,7 +220,7 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 //
 // TODO: Support Debian images with valid dpkg status but missing tools. No current examples exist in test set
 // i.e. extra RunOption to mount a copy of busybox-static or full apt install into the image and invoking that.
-func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, error) {
+func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdatePackages) (*llb.State, []byte, error) {
 	// TODO: Add support for custom APT config and gpg key injection
 	// Since this takes place in the target container, it can interfere with install actions
 	// such as the installation of the updated debian-archive-keyring package, so it's probably best
@@ -249,14 +249,15 @@ func (dm *dpkgManager) installUpdates(ctx context.Context, updates types.UpdateP
 	resultsWritten := aptInstalled.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).Root()
 	resultsDiff := llb.Diff(aptInstalled, resultsWritten)
 
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &resultsDiff, dm.workingFolder); err != nil {
-		return nil, err
+	resultsBytes, err := buildkit.ExtractFileFromState(ctx, dm.config.Client, &resultsDiff, filepath.Join(resultsPath, resultManifest))
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Diff the installed updates and merge that into the target image
 	patchDiff := llb.Diff(aptUpdated, aptInstalled)
 	patchMerge := llb.Merge([]llb.State{dm.config.ImageState, patchDiff})
-	return &patchMerge, nil
+	return &patchMerge, resultsBytes, nil
 }
 
 func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates types.UpdatePackages, toolImage string) (*llb.State, error) {
@@ -345,14 +346,8 @@ func (dm *dpkgManager) GetPackageType() string {
 	return "deb"
 }
 
-func dpkgParseResultsManifest(path string) (map[string]string, error) {
-	// Open result file
-	f, err := os.Open(path)
-	if err != nil {
-		log.Errorf("%s could not be opened", path)
-		return nil, err
-	}
-	defer f.Close()
+func dpkgParseResultsManifest(b []byte) (map[string]string, error) {
+	buf := bytes.NewBuffer(b)
 
 	// results.manifest file is expected to be subset of DPKG status or debian info format
 	// consisting of repeating consecutive blocks of:
@@ -361,7 +356,7 @@ func dpkgParseResultsManifest(path string) (map[string]string, error) {
 	// Version: <version value>
 	// ...
 	updateMap := map[string]string{}
-	fs := bufio.NewScanner(f)
+	fs := bufio.NewScanner(buf)
 	var packageName string
 	for fs.Scan() {
 		kv := strings.Split(fs.Text(), " ")
@@ -392,9 +387,9 @@ func dpkgParseResultsManifest(path string) (map[string]string, error) {
 	return updateMap, nil
 }
 
-func validateDebianPackageVersions(updates types.UpdatePackages, cmp VersionComparer, resultsPath string, ignoreErrors bool) ([]string, error) {
+func validateDebianPackageVersions(updates types.UpdatePackages, cmp VersionComparer, results []byte, ignoreErrors bool) ([]string, error) {
 	// Load file into map[string]string for package:version lookup
-	updateMap, err := dpkgParseResultsManifest(resultsPath)
+	updateMap, err := dpkgParseResultsManifest(results)
 	if err != nil {
 		return nil, err
 	}
