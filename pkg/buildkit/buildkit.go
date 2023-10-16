@@ -146,6 +146,31 @@ func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image stri
 	return &config, nil
 }
 
+// Extracts the bytes of the file denoted by `path` from the state `st`.
+func ExtractFileFromState(ctx context.Context, c gwclient.Client, st *llb.State, path string) ([]byte, error) {
+	def, err := st.Marshal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.Solve(ctx, gwclient.SolveRequest{
+		Evaluate:   true,
+		Definition: def.ToPB(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	ref, err := resp.SingleRef()
+	if err != nil {
+		return nil, err
+	}
+
+	return ref.ReadFile(ctx, gwclient.ReadRequest{
+		Filename: path,
+	})
+}
+
 func SolveToLocal(ctx context.Context, c *client.Client, st *llb.State, outPath string) error {
 	def, err := st.Marshal(ctx)
 	if err != nil {
