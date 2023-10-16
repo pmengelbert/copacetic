@@ -19,6 +19,7 @@ import (
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/util/contentutil"
@@ -35,7 +36,7 @@ import (
 
 type Config struct {
 	ImageName  string
-	Client     *client.Client
+	Client     gwclient.Client
 	ConfigData []byte
 	Platform   ispec.Platform
 	ImageState llb.State
@@ -109,7 +110,7 @@ func resolveImageConfig(ctx context.Context, ref string, platform *ispec.Platfor
 	return dgst, config, nil
 }
 
-func InitializeBuildkitConfig(ctx context.Context, client *client.Client, image string, manifest *types.UpdateManifest) (*Config, error) {
+func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, image string, manifest *types.UpdateManifest) (*Config, error) {
 	// Initialize buildkit config for the target image
 	config := Config{
 		ImageName: image,
@@ -120,23 +121,27 @@ func InitializeBuildkitConfig(ctx context.Context, client *client.Client, image 
 	}
 
 	// Resolve and pull the config for the target image
-	_, configData, err := resolveImageConfig(ctx, image, &config.Platform)
+	_, _, configData, err := c.ResolveImageConfig(ctx, image, llb.ResolveImageConfigOpt{
+		ResolveMode: llb.ResolveModePreferLocal.String(),
+	})
 	if err != nil {
 		return nil, err
 	}
+
 	config.ConfigData = configData
 
 	// Load the target image state with the resolved image config in case environment variable settings
 	// are necessary for running apps in the target image for updates
 	config.ImageState, err = llb.Image(image,
 		llb.Platform(config.Platform),
-		llb.ResolveModeDefault,
+		llb.ResolveModePreferLocal,
+		llb.WithMetaResolver(c),
 	).WithImageConfig(config.ConfigData)
 	if err != nil {
 		return nil, err
 	}
 
-	config.Client = client
+	config.Client = c
 
 	return &config, nil
 }
