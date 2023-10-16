@@ -7,6 +7,7 @@ package buildkit
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -169,6 +170,10 @@ func ExtractFileFromState(ctx context.Context, c gwclient.Client, st *llb.State,
 	return ref.ReadFile(ctx, gwclient.ReadRequest{
 		Filename: path,
 	})
+}
+
+func Env(k, v string) string {
+	return fmt.Sprintf("%s=%s", k, v)
 }
 
 func SolveToLocal(ctx context.Context, c *client.Client, st *llb.State, outPath string) error {

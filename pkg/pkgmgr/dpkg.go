@@ -26,6 +26,8 @@ const (
 	dpkgLibPath      = "/var/lib/dpkg"
 	dpkgStatusPath   = dpkgLibPath + "/status"
 	dpkgStatusFolder = dpkgLibPath + "/status.d"
+
+	statusdOutputFilename = "statusd_type"
 )
 
 type dpkgManager struct {
@@ -42,6 +44,8 @@ const (
 	DPKGStatusFile
 	DPKGStatusDirectory
 	DPKGStatusMixed
+
+	DPKGStatusInvalid // must always be the last listed
 )
 
 func (st dpkgStatusType) String() string {
@@ -83,19 +87,17 @@ func getAPTImageName(manifest *types.UpdateManifest) string {
 	return fmt.Sprintf("%s:%s", manifest.OSType, version)
 }
 
-func getDPKGStatusType(dir string) dpkgStatusType {
-	out := DPKGStatusNone
-	if utils.IsNonEmptyFile(dir, "status") {
-		out = DPKGStatusFile
+func getDPKGStatusType(b []byte) dpkgStatusType {
+	if len(b) == 0 {
+		return DPKGStatusNone
 	}
-	if utils.IsNonEmptyFile(dir, "status.d") {
-		if out == DPKGStatusFile {
-			out = DPKGStatusMixed
-		} else {
-			out = DPKGStatusDirectory
-		}
+
+	statusType := dpkgStatusType(b[0])
+	if statusType >= DPKGStatusInvalid {
+		return DPKGStatusInvalid
 	}
-	return out
+
+	return statusType
 }
 
 func (dm *dpkgManager) InstallUpdates(ctx context.Context, manifest *types.UpdateManifest, ignoreErrors bool) (*llb.State, []string, error) {
@@ -159,26 +161,47 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string) er
 	busyBoxApplied := dm.config.ImageState.File(llb.Copy(busyBoxInstalled, "/bin/busybox", "/bin/busybox"))
 	mkFolders := busyBoxApplied.File(llb.Mkdir(resultsPath, 0o744, llb.WithParents(true)))
 
-	const probeTemplate = `/bin/busybox sh -c "if [ -f %[1]s ]; then cp %[1]s %[3]s ; fi && if [ -d %[2]s ]; then ls -1 %[2]s > %[4]s ; fi"`
-	probeCmd := fmt.Sprintf(probeTemplate, dpkgStatusPath, dpkgStatusFolder, resultsPath, filepath.Join(resultsPath, "status.d"))
-	probed := mkFolders.Run(llb.Shlex(probeCmd)).Root()
+	probed := mkFolders.
+		Run(llb.Args([]string{
+			`/bin/busybox`, `env`,
+			buildkit.Env("DPKG_STATUS_PATH", dpkgStatusPath),
+			buildkit.Env("RESULTS_PATH", resultsPath),
+			buildkit.Env("DPKG_STATUS_FOLDER", dpkgStatusFolder),
+			buildkit.Env("RESULT_STATUSD_PATH", filepath.Join(resultsPath, "status.d")),
+			buildkit.Env("DPKG_STATUS_IS_DIRECTORY", string(byte(DPKGStatusDirectory))),
+			buildkit.Env("DPKG_STATUS_IS_FILE", string(byte(DPKGStatusFile))),
+			buildkit.Env("DPKG_STATUS_IS_UNKNOWN", string(byte(DPKGStatusNone))),
+			buildkit.Env("STATUSD_OUTPUT_FILENAME", statusdOutputFilename),
+			`sh`, `-c`, `
+                status="$DPKG_STATUS_IS_UNKNOWN"
+                if [ -f "$DPKG_STATUS_PATH" ]; then
+                    status="$DPKG_STATUS_IS_FILE"
+                    cp "$DPKG_STATUS_PATH" "$RESULTS_PATH"
+                elif [ -d "$DPKG_STATUS_FOLDER" ]; then
+                    status="$DPKG_STATUS_IS_DIRECTORY"
+                    ls -1 "$DPKG_STATUS_FOLDER" > "$RESULT_STATUSD_PATH"
+                fi
+                printf "$status" > "${RESULTS_PATH}/${STATUSD_OUTPUT_FILENAME}"
+        `,
+		})).Root()
+
 	outState := llb.Diff(busyBoxApplied, probed)
-	if err := buildkit.SolveToLocal(ctx, dm.config.Client, &outState, dm.workingFolder); err != nil {
+	typeBytes, err := buildkit.ExtractFileFromState(ctx, dm.config.Client, &outState, filepath.Join(resultsPath, statusdOutputFilename))
+	if err != nil {
 		return err
 	}
 
-	// Check Status File
-	outStatePath := filepath.Join(dm.workingFolder, resultsPath)
-	dpkgStatus := getDPKGStatusType(outStatePath)
+	dpkgStatus := getDPKGStatusType(typeBytes)
 	switch dpkgStatus {
 	case DPKGStatusFile:
 		return nil
 	case DPKGStatusDirectory:
-		statusdNames, err := os.ReadFile(filepath.Join(outStatePath, "status.d"))
+		statusdNamesBytes, err := buildkit.ExtractFileFromState(ctx, dm.config.Client, &outState, filepath.Join(resultsPath, "status.d"))
 		if err != nil {
 			return err
 		}
-		dm.statusdNames = strings.ReplaceAll(string(statusdNames), "\n", " ")
+		dm.statusdNames = strings.ReplaceAll(string(statusdNamesBytes), "\n", " ")
+		dm.statusdNames = strings.TrimSpace(dm.statusdNames)
 		log.Infof("Processed status.d: %s", dm.statusdNames)
 		dm.isDistroless = true
 		return nil
