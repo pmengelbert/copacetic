@@ -182,17 +182,17 @@ func ArrayFile(input []string) []byte {
 	return b.Bytes()
 }
 
-func WithArrayFile(s *llb.State, path string, contents []string) llb.State {
+func WithArrayFile(s llb.State, path string, contents []string) llb.State {
 	af := ArrayFile(contents)
 	return WithFileBytes(s, path, af)
 }
 
-func WithFileString(s *llb.State, path, contents string) llb.State {
+func WithFileString(s llb.State, path, contents string) llb.State {
 	return WithFileBytes(s, path, []byte(contents))
 }
 
-func WithFileBytes(s *llb.State, path string, contents []byte) llb.State {
-	return s.File(llb.Mkfile(path, 0o644, contents))
+func WithFileBytes(s llb.State, path string, contents []byte) llb.State {
+	return s.File(llb.Mkfile(path, 0o600, contents))
 }
 
 func Env(k, v string) string {

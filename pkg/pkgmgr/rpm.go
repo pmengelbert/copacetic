@@ -240,8 +240,8 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 	toolListPath := filepath.Join(resultsPath, "tool_list")
 	dbListPath := filepath.Join(resultsPath, "rpm_db_list")
 
-	probed := buildkit.WithArrayFile(&mkFolders, toolListPath, toolList)
-	probed = buildkit.WithArrayFile(&probed, dbListPath, rpmDBList)
+	probed := buildkit.WithArrayFile(mkFolders, toolListPath, toolList)
+	probed = buildkit.WithArrayFile(probed, dbListPath, rpmDBList)
 	probed = probed.Run(llb.Args([]string{
 		`/usr/sbin/busybox`, `env`,
 		buildkit.Env("TOOL_LIST_PATH", toolListPath),
@@ -250,11 +250,10 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 		buildkit.Env("RPM_TOOLS_OUTPUT_FILENAME", rpmToolsFile),
 		buildkit.Env("RPM_DB_LIST_OUTPUT_FILENAME", rpmDBFile),
 		buildkit.Env("BUSYBOX", "/usr/sbin/busybox"),
-		`sh`, `-c`,
-		`
+		`/usr/sbin/busybox`, `sh`, `-c`, `
             while IFS= read -r tool; do
                 tool_path="$($BUSYBOX which "$tool")"
-                echo "${tool}:${tool_path:-notfound}" >> "${RESULTS_PATH}/${RPM_TOOLS_OUTPUT_FILENAME}"
+                echo "${tool}:${tool_path:-notfound}" > "${RESULTS_PATH}/${RPM_TOOLS_OUTPUT_FILENAME}"
             done < "$TOOL_LIST_PATH"
 
             while IFS= read -r db; do
