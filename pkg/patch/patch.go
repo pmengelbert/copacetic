@@ -12,7 +12,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/containerd/console"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
@@ -20,7 +19,6 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/buildkit/client"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
-	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
 	"github.com/project-copacetic/copacetic/pkg/pkgmgr"
 	"github.com/project-copacetic/copacetic/pkg/report"
@@ -123,71 +121,99 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 	if err != nil {
 		return err
 	}
-	defer bkClient.Close()
+	// defer bkClient.Close()
 
-	ch := make(chan *client.SolveStatus)
-	eg, ctx := errgroup.WithContext(ctx)
+	var bkConfig buildkit.Config
+	eg, _ := errgroup.WithContext(ctx)
+
 	eg.Go(func() error {
-		_, err := bkClient.Build(ctx, client.SolveOpt{}, copaProduct, func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
-			// Configure buildctl/client for use by package manager
-			config, err := buildkit.InitializeBuildkitConfig(ctx, c, image, updates)
-			if err != nil {
+		// Configure buildctl/client for use by package manager
+
+		_, err = bkClient.Build(ctx, client.SolveOpt{}, copaProduct, func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
+			return c.Solve(ctx, gwclient.SolveRequest{Evaluate: true})
+		}, nil)
+
+		return err
+	})
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+
+	// solveOpts := client.SolveOpt{
+	// 	Exports: []client.ExportEntry{
+	// 		{
+	// 			Type: "moby",
+	// 			Attrs: map[string]string{
+	// 				"name": tag,
+	// 				// Pass through resolved configData from original image
+	// 				exptypes.ExporterImageConfigKey: string(bkConfig.ConfigData),
+	// 			},
+	// 		},
+	// 	},
+	// 	Ref: patchedImageName,
+	// }
+
+	_, err = bkClient.Build(ctx, client.SolveOpt{}, copaProduct, func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
+		config, err := buildkit.InitializeBuildkitConfig(ctx, c, image, updates)
+		if err != nil {
+			return nil, err
+		}
+
+		bkConfig = *config
+		// Create package manager helper
+		pkgmgr, err := pkgmgr.GetPackageManager(updates.OSType, &bkConfig, workingFolder)
+		if err != nil {
+			return nil, err
+		}
+
+		// Export the patched image state to Docker
+		// TODO: Add support for other output modes as buildctl does.
+		patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
+		if err != nil {
+			return nil, err
+		}
+
+		def, err := patchedImageState.Marshal(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		solveResp, solveErr := c.Solve(ctx, gwclient.SolveRequest{
+			Evaluate:   true,
+			Definition: def.ToPB(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		// _ = patchedImageName
+		if err := buildkit.SolveToDocker(ctx, bkClient, patchedImageState, bkConfig.ConfigData, patchedImageName); err != nil {
+			return nil, err
+		}
+
+		// create a new manifest with the successfully patched packages
+		validatedManifest := &types.UpdateManifest{
+			OSType:    updates.OSType,
+			OSVersion: updates.OSVersion,
+			Arch:      updates.Arch,
+			Updates:   []types.UpdatePackage{},
+		}
+		for _, update := range updates.Updates {
+			if !slices.Contains(errPkgs, update.Name) {
+				validatedManifest.Updates = append(validatedManifest.Updates, update)
+			}
+		}
+
+		// vex document must contain at least one statement
+		if output != "" && len(validatedManifest.Updates) > 0 {
+			if err := vex.TryOutputVexDocument(validatedManifest, pkgmgr, format, output); err != nil {
 				return nil, err
-			}
-
-			// Create package manager helper
-			pkgmgr, err := pkgmgr.GetPackageManager(updates.OSType, config, workingFolder)
-			if err != nil {
-				return nil, err
-			}
-
-			// Export the patched image state to Docker
-			// TODO: Add support for other output modes as buildctl does.
-			patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
-			if err != nil {
-				return nil, err
-			}
-
-			if err := buildkit.SolveToDocker(ctx, bkClient, patchedImageState, config.ConfigData, patchedImageName); err != nil {
-				return nil, err
-			}
-
-			// create a new manifest with the successfully patched packages
-			validatedManifest := &types.UpdateManifest{
-				OSType:    updates.OSType,
-				OSVersion: updates.OSVersion,
-				Arch:      updates.Arch,
-				Updates:   []types.UpdatePackage{},
-			}
-			for _, update := range updates.Updates {
-				if !slices.Contains(errPkgs, update.Name) {
-					validatedManifest.Updates = append(validatedManifest.Updates, update)
-				}
-			}
-
-			// vex document must contain at least one statement
-			if output != "" && len(validatedManifest.Updates) > 0 {
-				if err := vex.TryOutputVexDocument(validatedManifest, pkgmgr, format, output); err != nil {
-					return nil, err
-				}
-
-				return nil, nil
 			}
 
 			return nil, nil
-		}, ch)
-
-		return err
-	})
-	eg.Go(func() error {
-		var c console.Console
-		if cn, err := console.ConsoleFromFile(os.Stderr); err == nil {
-			c = cn
 		}
-		// not using shared context to not disrupt display but let us finish reporting errors
-		_, err = progressui.DisplaySolveStatus(context.TODO(), c, os.Stdout, ch)
-		return err
-	})
 
-	return eg.Wait()
+		return solveResp, solveErr
+	}, nil)
+
+	return err
 }
