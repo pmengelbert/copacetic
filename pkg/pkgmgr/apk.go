@@ -40,6 +40,10 @@ func isLessThanAPKVersion(v1, v2 string) bool {
 }
 
 func apkReadResultsManifest(b []byte) ([]string, error) {
+	if b == nil {
+		return nil, fmt.Errorf("nil buffer provided")
+	}
+
 	buf := bytes.NewBuffer(b)
 
 	var lines []string

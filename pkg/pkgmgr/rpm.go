@@ -449,6 +449,10 @@ func (rm *rpmManager) GetPackageType() string {
 }
 
 func rpmReadResultsManifest(b []byte) ([]string, error) {
+	if b == nil {
+		return nil, fmt.Errorf("nil result manifest buffer")
+	}
+
 	buf := bytes.NewBuffer(b)
 
 	var lines []string
