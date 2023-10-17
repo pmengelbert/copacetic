@@ -5,7 +5,6 @@ go 1.20
 require (
 	github.com/aquasecurity/trivy v0.45.1
 	github.com/containerd/console v1.0.3
-	github.com/containerd/containerd v1.7.7
 	github.com/cpuguy83/dockercfg v0.3.1
 	github.com/distribution/reference v0.5.0
 	github.com/docker/buildx v0.11.2
@@ -28,7 +27,10 @@ require (
 	google.golang.org/grpc v1.59.0
 )
 
-require github.com/containerd/log v0.1.0 // indirect
+require (
+	github.com/containerd/containerd v1.7.7 // indirect
+	github.com/containerd/log v0.1.0 // indirect
+)
 
 require (
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
@@ -42,7 +44,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/containerd/continuity v0.4.2 // indirect
-	github.com/containerd/ttrpc v1.2.2 // indirect
 	github.com/containerd/typeurl/v2 v2.1.1 // indirect
 	github.com/cpuguy83/go-docker v0.2.1
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
