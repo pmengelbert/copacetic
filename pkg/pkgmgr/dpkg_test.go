@@ -181,7 +181,8 @@ var (
 	//go:embed testdata/dpkg_valid.txt
 	validDPKGManifest []byte
 
-	nonExistingManifest []byte = nil
+	// initialized to `nil`; tests error handling.
+	nonExistingManifest []byte
 
 	//go:embed testdata/empty.txt
 	emptyManifest []byte

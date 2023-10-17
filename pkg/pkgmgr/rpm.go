@@ -133,7 +133,7 @@ func parseRPMTools(b []byte) (rpmToolPaths, error) {
 	return rpmTools, nil
 }
 
-// Check the RPM DB type given image probe results
+// Check the RPM DB type given image probe results.
 func getRPMDBType(b []byte) rpmDBType {
 	buf := bytes.NewBuffer(b)
 	s := bufio.NewScanner(buf)
@@ -240,8 +240,8 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 	toolListPath := filepath.Join(resultsPath, "tool_list")
 	dbListPath := filepath.Join(resultsPath, "rpm_db_list")
 
-	probed := buildkit.WithArrayFile(mkFolders, toolListPath, toolList)
-	probed = buildkit.WithArrayFile(probed, dbListPath, rpmDBList)
+	probed := buildkit.WithArrayFile(&mkFolders, toolListPath, toolList)
+	probed = buildkit.WithArrayFile(&probed, dbListPath, rpmDBList)
 	probed = probed.Run(llb.Args([]string{
 		`/usr/sbin/busybox`, `env`,
 		buildkit.Env("TOOL_LIST_PATH", toolListPath),
@@ -287,7 +287,12 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 	// Parse rpmTools File if not distroless
 	if !rm.isDistroless {
 		log.Info("Checking for available RPM tools in non-distroless image ...")
+
 		toolsFileBytes, err := buildkit.ExtractFileFromState(ctx, rm.config.Client, &outState, filepath.Join(resultsPath, rpmToolsFile))
+		if err != nil {
+			return err
+		}
+
 		rpmTools, err := parseRPMTools(toolsFileBytes)
 		if err != nil {
 			return err
