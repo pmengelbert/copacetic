@@ -23,6 +23,7 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
@@ -138,6 +139,9 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 		Exports: []client.ExportEntry{
 			{
 				Type: client.ExporterDocker,
+				Attrs: map[string]string{
+					"name": patchedImageName,
+				},
 				Output: func(_ map[string]string) (io.WriteCloser, error) {
 					return pipeW, nil
 				},
@@ -175,10 +179,16 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 			}
 
 			def, err := patchedImageState.Marshal(ctx)
+			if err != nil {
+				return nil, err
+			}
+
 			res, err := c.Solve(ctx, gwclient.SolveRequest{
 				Definition: def.ToPB(),
 				Evaluate:   true,
 			})
+
+			res.AddMeta(exptypes.ExporterImageConfigKey, config.ConfigData)
 			if err != nil {
 				return nil, err
 			}
