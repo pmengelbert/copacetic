@@ -18,22 +18,18 @@ import (
 	"github.com/docker/buildx/build"
 	"github.com/docker/cli/cli/config"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/distribution/reference"
 	"github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	"github.com/moby/buildkit/client/llb"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
-	"github.com/project-copacetic/copacetic/pkg/pkgmgr"
 	"github.com/project-copacetic/copacetic/pkg/report"
-	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
 	"github.com/project-copacetic/copacetic/pkg/utils"
-	"github.com/project-copacetic/copacetic/pkg/vex"
 )
 
 const (
@@ -149,8 +145,11 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 				},
 			},
 		},
-		Frontend: "",         // i.e. we are passing in the llb.Definition directly
-		Session:  attachable, // used for authprovider, sshagentprovider and secretprovider
+		Frontend: "", // i.e. we are passing in the llb.Definition directly
+		FrontendInputs: map[string]llb.State{
+			"context:foo:bar": llb.Image("busybox:latest"),
+		},
+		Session: attachable, // used for authprovider, sshagentprovider and secretprovider
 	}
 	solveOpt.SourcePolicy, err = build.ReadSourcePolicy()
 	if err != nil {
@@ -162,63 +161,67 @@ func patchWithContext(ctx context.Context, image, reportFile, patchedTag, workin
 	eg.Go(func() error {
 		_, err := bkClient.Build(ctx, solveOpt, copaProduct, func(ctx context.Context, c gwclient.Client) (*gwclient.Result, error) {
 			// Configure buildctl/client for use by package manager
-			config, err := buildkit.InitializeBuildkitConfig(ctx, c, imageName.String(), updates)
-			if err != nil {
-				return nil, err
-			}
+			// config, err := buildkit.InitializeBuildkitConfig(ctx, c, imageName.String(), updates)
+			// if err != nil {
+			// 	return nil, err
+			// }
 
-			// Create package manager helper
-			pkgmgr, err := pkgmgr.GetPackageManager(updates.Metadata.OS.Type, config, workingFolder)
-			if err != nil {
-				return nil, err
-			}
+			// // Create package manager helper
+			// pkgmgr, err := pkgmgr.GetPackageManager(updates.Metadata.OS.Type, config, workingFolder)
+			// if err != nil {
+			// 	return nil, err
+			// }
 
-			// Export the patched image state to Docker
-			// TODO: Add support for other output modes as buildctl does.
-			patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
-			if err != nil {
-				return nil, err
-			}
+			// // Export the patched image state to Docker
+			// // TODO: Add support for other output modes as buildctl does.
+			// patchedImageState, errPkgs, err := pkgmgr.InstallUpdates(ctx, updates, ignoreError)
+			// if err != nil {
+			// 	return nil, err
+			// }
+			s := llb.Image("foo:bar").File(llb.Mkfile("/hey", 0o666, []byte("hello, world!")))
 
-			def, err := patchedImageState.Marshal(ctx)
+			def, err := s.Marshal(ctx)
 			if err != nil {
 				return nil, err
 			}
 
 			res, err := c.Solve(ctx, gwclient.SolveRequest{
 				Definition: def.ToPB(),
-				Evaluate:   true,
+				FrontendOpt: map[string]string{
+					"context:foo:bar": "docker-image://busybox:latest",
+				},
+				Evaluate: true,
 			})
 
-			res.AddMeta(exptypes.ExporterImageConfigKey, config.ConfigData)
-			if err != nil {
-				return nil, err
-			}
+			// res.AddMeta(exptypes.ExporterImageConfigKey, config.ConfigData)
+			// if err != nil {
+			// 	return nil, err
+			// }
 
 			// create a new manifest with the successfully patched packages
-			validatedManifest := &unversioned.UpdateManifest{
-				Metadata: unversioned.Metadata{
-					OS: unversioned.OS{
-						Type:    updates.Metadata.OS.Type,
-						Version: updates.Metadata.OS.Version,
-					},
-					Config: unversioned.Config{
-						Arch: updates.Metadata.Config.Arch,
-					},
-				},
-				Updates: []unversioned.UpdatePackage{},
-			}
-			for _, update := range updates.Updates {
-				if !slices.Contains(errPkgs, update.Name) {
-					validatedManifest.Updates = append(validatedManifest.Updates, update)
-				}
-			}
-			// vex document must contain at least one statement
-			if output != "" && len(validatedManifest.Updates) > 0 {
-				if err := vex.TryOutputVexDocument(validatedManifest, pkgmgr, patchedImageName, format, output); err != nil {
-					return nil, err
-				}
-			}
+			// validatedManifest := &unversioned.UpdateManifest{
+			// 	Metadata: unversioned.Metadata{
+			// 		OS: unversioned.OS{
+			// 			Type:    updates.Metadata.OS.Type,
+			// 			Version: updates.Metadata.OS.Version,
+			// 		},
+			// 		Config: unversioned.Config{
+			// 			Arch: updates.Metadata.Config.Arch,
+			// 		},
+			// 	},
+			// 	Updates: []unversioned.UpdatePackage{},
+			// }
+			// for _, update := range updates.Updates {
+			// 	if !slices.Contains(errPkgs, update.Name) {
+			// 		validatedManifest.Updates = append(validatedManifest.Updates, update)
+			// 	}
+			// }
+			// // vex document must contain at least one statement
+			// if output != "" && len(validatedManifest.Updates) > 0 {
+			// 	if err := vex.TryOutputVexDocument(validatedManifest, pkgmgr, patchedImageName, format, output); err != nil {
+			// 		return nil, err
+			// 	}
+			// }
 
 			return res, nil
 		}, ch)
